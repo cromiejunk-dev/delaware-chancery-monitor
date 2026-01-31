@@ -1,0 +1,73 @@
+name: Check Delaware Chancery Opinions
+
+on:
+  schedule:
+    - cron: '0 14 * * *'
+  workflow_dispatch:
+
+jobs:
+  check-opinions:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install Chrome
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y wget unzip
+        wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+        sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
+    
+    - name: Install ChromeDriver
+      run: |
+        CHROME_VERSION=$(google-chrome --version | awk '{print $3}' | cut -d '.' -f 1)
+        wget -q https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json
+        CHROMEDRIVER_URL=$(cat last-known-good-versions-with-downloads.json | python3 -c "import sys, json; data=json.load(sys.stdin); print([x['url'] for x in data['channels']['Stable']['downloads']['chromedriver'] if 'linux64' in x['url']][0])")
+        wget -q $CHROMEDRIVER_URL -O chromedriver.zip
+        unzip -q chromedriver.zip
+        sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
+        sudo chmod +x /usr/local/bin/chromedriver
+    
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install selenium requests
+    
+    - name: Download previous seen_opinions.json
+      uses: actions/download-artifact@v4
+      with:
+        name: seen-opinions
+        path: .
+      continue-on-error: true
+    
+    - name: Run opinion checker
+      env:
+        EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+        EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+        SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+        SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      run: python check_opinions_chancery.py
+    
+    - name: Upload seen_opinions.json
+      uses: actions/upload-artifact@v4
+      with:
+        name: seen-opinions
+        path: seen_opinions.json
+        retention-days: 90
+    
+    - name: Commit and push changes
+      run: |
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git add seen_opinions.json
+        git diff --quiet && git diff --staged --quiet || (git commit -m "Update seen opinions" && git push)
+      continue-on-error: true
